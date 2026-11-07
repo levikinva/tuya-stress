@@ -33,6 +33,10 @@ struct Runner<'a> {
 /// Как часто печатать прогресс
 const PROGRESS_EVERY: Duration = Duration::from_secs(60);
 
+/// Пауза перед переподключением растёт с числом ошибок подряд: 1 с, 2 с … до 5 с
+const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_DELAY_MAX_STEPS: u32 = 5;
+
 impl<'a> Runner<'a> {
     fn log_error(&self, e: impl std::fmt::Display) {
         event!("#{} ОШИБКА: {e}", self.ok);
@@ -40,6 +44,11 @@ impl<'a> Runner<'a> {
 
     fn connection(&mut self) -> Option<&mut Connection> {
         if self.conn.is_none() {
+            // после ошибок переподключаемся не сразу: шквал подключений сам
+            // по себе нагружает устройство и искажает результат
+            if self.fails > 0 {
+                std::thread::sleep(RECONNECT_DELAY * self.fails.min(RECONNECT_DELAY_MAX_STEPS));
+            }
             match Connection::open(&self.cfg) {
                 Ok(c) => {
                     self.connects += 1;

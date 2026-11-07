@@ -1,5 +1,6 @@
 """Минимальный эмулятор Tuya-устройства (3.3/3.4/3.5) на примитивах tinytuya,
-для проверки Rust-клиента. Аргументы: версия, порт, [после скольких команд "зависнуть"]"""
+для проверки Rust-клиента.
+Аргументы: версия, порт, [после скольких команд "зависнуть"], [отклонять каждую N-ю команду]"""
 import hmac, json, os, socket, struct, sys, threading
 from hashlib import sha256
 from tinytuya.core.message_helper import pack_message, unpack_message, parse_header, TuyaMessage
@@ -7,6 +8,7 @@ from tinytuya.core.crypto_helper import AESCipher
 from tinytuya.core import header as H
 
 VER = float(sys.argv[1]); PORT = int(sys.argv[2]); HANG_AFTER = int(sys.argv[3]) if len(sys.argv) > 3 else 10**9
+REJECT_EVERY = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 KEY = b"0123456789abcdef"
 VB = str(VER).encode(); VH = VB + b"\x00" * 12
 state = {"114": 5, "101": True}
@@ -15,19 +17,19 @@ cmd_count = 0
 def handle(sock):
     global cmd_count
     key = KEY; seq = 100; buf = b""; local_nonce = remote_nonce = None
-    def send(cmd, payload, use_key, add_header=False):
+    def send(cmd, payload, use_key, add_header=False, retcode=0):
         nonlocal seq
         seq += 1
         if VER == 3.5:
             plain = (VH if add_header else b"") + payload
-            data = pack_message(TuyaMessage(seq, cmd, 0, plain, 0, True, H.PREFIX_6699_VALUE, True), hmac_key=use_key)
+            data = pack_message(TuyaMessage(seq, cmd, retcode, plain, 0, True, H.PREFIX_6699_VALUE, True), hmac_key=use_key)
         elif VER == 3.4:
             plain = (VH if add_header else b"") + payload
             enc = AESCipher(use_key).encrypt(plain, False) if plain else b""
-            data = pack_message(TuyaMessage(seq, cmd, 0, struct.pack(">I", 0) + enc, 0, True, H.PREFIX_55AA_VALUE, False), hmac_key=use_key)
+            data = pack_message(TuyaMessage(seq, cmd, 0, struct.pack(">I", retcode) + enc, 0, True, H.PREFIX_55AA_VALUE, False), hmac_key=use_key)
         else:
             enc = AESCipher(use_key).encrypt(payload, False) if payload else b""
-            body = struct.pack(">I", 0) + ((VH + enc) if add_header else enc)
+            body = struct.pack(">I", retcode) + ((VH + enc) if add_header else enc)
             data = pack_message(TuyaMessage(seq, cmd, 0, body, 0, True, H.PREFIX_55AA_VALUE, False))
         sock.sendall(data)
     while True:
@@ -71,11 +73,21 @@ def handle(sock):
             if cmd_count > HANG_AFTER:
                 continue  # "завис": молчим
             js = json.loads(p.decode())
-            if m.cmd in (7, 13):
+            if m.cmd in (7, 13) and REJECT_EVERY and cmd_count % REJECT_EVERY == 0:
+                send(m.cmd, b"data format error", key, retcode=1)
+            elif m.cmd in (7, 13):
                 dps = js["dps"] if m.cmd == 7 else js["data"]["dps"]
                 state.update(dps)
-                send(m.cmd, b"", key)
-                send(8, json.dumps({"dps": dps, "t": 1}).encode(), key, add_header=True)
+                if cmd_count % 3 == 0:
+                    # посторонний отчёт, как периодические отчёты реальных устройств
+                    send(8, json.dumps({"dps": {"101": True}, "t": 1}).encode(), key, add_header=True)
+                if cmd_count % 5 == 0:
+                    # отчёт раньше подтверждения
+                    send(8, json.dumps({"dps": dps, "t": 1}).encode(), key, add_header=True)
+                    send(m.cmd, b"", key)
+                else:
+                    send(m.cmd, b"", key)
+                    send(8, json.dumps({"dps": dps, "t": 1}).encode(), key, add_header=True)
             elif m.cmd in (10, 16):
                 send(m.cmd, json.dumps({"dps": state}).encode(), key)
             print(f"cmd={m.cmd} payload={js}", flush=True)
