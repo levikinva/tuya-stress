@@ -33,7 +33,8 @@ struct Runner<'a> {
 /// Как часто печатать прогресс
 const PROGRESS_EVERY: Duration = Duration::from_secs(60);
 
-/// Пауза перед переподключением растёт с числом ошибок подряд: 1 с, 2 с … до 5 с
+/// Пауза перед переподключением по умолчанию растёт с числом ошибок подряд:
+/// 1 с, 2 с … до 5 с (если не задан --reconnect-delay)
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_DELAY_MAX_STEPS: u32 = 5;
 
@@ -47,7 +48,14 @@ impl<'a> Runner<'a> {
             // после ошибок переподключаемся не сразу: шквал подключений сам
             // по себе нагружает устройство и искажает результат
             if self.fails > 0 {
-                std::thread::sleep(RECONNECT_DELAY * self.fails.min(RECONNECT_DELAY_MAX_STEPS));
+                let delay = match self.args.reconnect_delay {
+                    Some(secs) => Duration::from_secs_f64(secs),
+                    None => RECONNECT_DELAY * self.fails.min(RECONNECT_DELAY_MAX_STEPS),
+                };
+                if delay >= Duration::from_secs(10) {
+                    event!("ждём {} с перед переподключением", delay.as_secs());
+                }
+                std::thread::sleep(delay);
             }
             match Connection::open(&self.cfg) {
                 Ok(c) => {
