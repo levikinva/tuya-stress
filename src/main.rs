@@ -27,13 +27,14 @@ fn main() -> ExitCode {
     }
 
     event!(
-        "старт: устройство={} протокол={} режим={:?} только_чтение={} ожидание_статуса={} интервал={}с dp={} значения={}",
+        "старт: устройство={} протокол={} режим={:?} только_чтение={} ожидание_статуса={} интервал={}с пауза_переподключения={} dp={} значения={}",
         args.ip,
         args.version,
         args.mode,
         args.read_only,
         args.wait_status,
         args.interval,
+        args.reconnect_delay.map_or("1–5с".to_string(), |d| format!("{d}с")),
         args.dp,
         args.values.0.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
     );

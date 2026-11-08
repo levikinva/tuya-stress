@@ -49,6 +49,10 @@ pub struct Args {
     /// Сколько ошибок подряд считать зависанием
     #[arg(long, default_value_t = 5)]
     pub fail_limit: u32,
+    /// Пауза перед переподключением после ошибки, секунд. По умолчанию
+    /// пауза растёт с числом ошибок подряд: 1, 2 … 5 с
+    #[arg(long, value_name = "СЕКУНД")]
+    pub reconnect_delay: Option<f64>,
     /// Сетевой таймаут, секунд
     #[arg(long, default_value_t = 5.0)]
     pub timeout: f64,
