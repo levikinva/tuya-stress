@@ -25,10 +25,19 @@ struct Runner<'a> {
     start: Instant,
     ok: u64,
     rejected: u64,
+    /// Отказы подряд, без единой успешной операции между ними
+    rejected_in_row: u32,
     fails: u32,
     connects: u64,
     last_report: Instant,
 }
+
+/// Пауза после отказа устройства выполнить команду
+const REJECT_PAUSE: Duration = Duration::from_millis(200);
+
+/// Столько отказов подряд считается зависанием: так выглядит зависший
+/// модуль, который на всё отвечает `data format error`
+const REJECT_LIMIT: u32 = 100;
 
 /// Как часто печатать прогресс
 const PROGRESS_EVERY: Duration = Duration::from_secs(60);
@@ -111,6 +120,7 @@ impl<'a> Runner<'a> {
             None => {} // не удалось подключиться, ошибка уже записана
             Some(Ok(())) => {
                 self.fails = 0;
+                self.rejected_in_row = 0;
                 self.ok += 1;
                 // первая операция, затем не реже раза в минуту
                 let report_due = self.last_report.elapsed() >= PROGRESS_EVERY;
@@ -121,10 +131,16 @@ impl<'a> Runner<'a> {
             }
             Some(Err(e @ Error::Device { .. })) => {
                 // устройство на связи, просто отказалось выполнять команду:
-                // это не зависание и не повод переподключаться
+                // это не повод переподключаться
                 self.rejected += 1;
+                self.rejected_in_row += 1;
                 self.fails = 0;
-                event!("#{} ОТКАЗ: {e}", self.ok);
+                // одинаковые отказы подряд не печатаем все до единого
+                if self.rejected_in_row <= 3 || self.rejected_in_row.is_multiple_of(100) {
+                    event!("#{} ОТКАЗ ({} подряд): {e}", self.ok, self.rejected_in_row);
+                }
+                // не долбим устройство, которое и так не справляется
+                std::thread::sleep(REJECT_PAUSE);
             }
             Some(Err(e)) => {
                 self.fails += 1;
@@ -146,6 +162,7 @@ pub fn run(args: &Args, cfg: DeviceConfig) -> Outcome {
         start: Instant::now(),
         ok: 0,
         rejected: 0,
+        rejected_in_row: 0,
         fails: 0,
         connects: 0,
         last_report: Instant::now(),
@@ -155,7 +172,11 @@ pub fn run(args: &Args, cfg: DeviceConfig) -> Outcome {
     loop {
         r.step();
 
-        let hung = r.fails >= args.fail_limit;
+        let rejecting = r.rejected_in_row >= REJECT_LIMIT;
+        if rejecting {
+            event!("устройство отвергает все команды: {} отказов подряд", r.rejected_in_row);
+        }
+        let hung = r.fails >= args.fail_limit || rejecting;
         let done = args.max_ops.is_some_and(|m| r.ok >= m);
         if hung || done {
             return Outcome {
