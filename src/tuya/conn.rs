@@ -213,8 +213,17 @@ fn status_value(payload: &[u8], dp: &str) -> Option<Value> {
 
 fn check_retcode(f: &Frame) -> Result<()> {
     match f.retcode {
-        Some(code) if code != 0 => Err(Error::Device { code, message: f.payload_str() }),
+        Some(code) if code != 0 => Err(Error::Device { code, message: readable_message(&f.payload) }),
         _ => Ok(()),
+    }
+}
+
+/// Текст ошибки от устройства. Нечитаемый ответ почти всегда означает,
+/// что устройство зашифровало его другим ключом.
+fn readable_message(payload: &[u8]) -> String {
+    match std::str::from_utf8(payload) {
+        Ok(s) if s.chars().all(|c| !c.is_control() || c.is_whitespace()) => s.trim().to_string(),
+        _ => "нечитаемый ответ — неверный local key или по этому адресу другое устройство".to_string(),
     }
 }
 
@@ -232,5 +241,16 @@ mod tests {
         assert_eq!(status_value(br#"{"data":{"dps":{"101":true}}}"#, "101"), Some(json!(true)));
         assert_eq!(status_value(br#"{"dps":{"101":true}}"#, "114"), None);
         assert_eq!(status_value(b"garbage", "114"), None);
+    }
+
+    #[test]
+    fn device_message_is_shown_when_readable() {
+        assert_eq!(readable_message(b"data format error"), "data format error");
+    }
+
+    #[test]
+    fn garbage_message_hints_at_wrong_key() {
+        let msg = readable_message(&[0xfa, 0x38, 0x7c, 0x01, 0xc2]);
+        assert!(msg.contains("неверный local key"));
     }
 }
